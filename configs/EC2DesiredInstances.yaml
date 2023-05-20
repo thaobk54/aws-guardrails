@@ -1,0 +1,142 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: ""
+Resources:
+  ConfigRule:
+    Type: "AWS::Config::ConfigRule"
+    Properties:
+      ConfigRuleName: "desired-instance-type"
+      Scope:
+        ComplianceResourceTypes:
+          - "AWS::EC2::Instance"
+      Description: "A config rule that checks whether your EC2 instances are of the specified instance types."
+      InputParameters:
+        # Maximum 8 vcpus and 32 GB of RAM
+        instanceType: "a1.2xlarge,a1.large,a1.medium,a1.xlarge,c1.medium,c1.xlarge,c3.2xlarge,c3.large,c3.xlarge,c4.2xlarge,c4.large,c4.xlarge,c5.2xlarge,c5.large,c5.xlarge,c5a.2xlarge,c5a.large,c5a.xlarge,c5ad.2xlarge,c5ad.large,c5ad.xlarge,c5d.2xlarge,c5d.large,c5d.xlarge,c5n.2xlarge,c5n.large,c5n.xlarge,c6a.2xlarge,c6a.large,c6a.xlarge,c6g.2xlarge,c6g.large,c6g.medium,c6g.xlarge,c6gn.2xlarge,c6gn.large,c6gn.medium,c6gn.xlarge,c6i.2xlarge,c6i.large,c6i.xlarge,m6a.2xlarge,m6a.large,m6a.xlarge,m6g.2xlarge,m6g.large,m6g.medium,m6g.xlarge,m6i.2xlarge,m6i.large,m6i.xlarge,r3.large,r3.xlarge,r4.large,r4.xlarge,r5.large,r5.xlarge,r5a.large,r5a.xlarge,r6a.large,r6a.xlarge,r6g.large,r6g.medium,r6g.xlarge,r6i.large,r6i.xlarge,t1.micro,t2.2xlarge,t2.large,t2.medium,t2.micro,t2.nano,t2.small,t2.xlarge,t3.2xlarge,t3.large,t3.medium,t3.micro,t3.nano,t3.small,t3.xlarge,t3a.2xlarge,t3a.large,t3a.medium,t3a.micro,t3a.nano,t3a.small,t3a.xlarge,t4g.2xlarge,t4g.large,t4g.medium,t4g.micro,t4g.nano,t4g.small,t4g.xlarge"
+      Source:
+        Owner: "AWS"
+        SourceIdentifier: "DESIRED_INSTANCE_TYPE"
+  # RemediationForConfigRule:
+  #   Type: "AWS::Config::RemediationConfiguration"
+  #   Properties:
+  #     Automatic: true
+  #     ConfigRuleName:
+  #       Ref: "ConfigRule"
+  #     MaximumAutomaticAttempts: 5
+  #     RetryAttemptSeconds: 60
+  #     TargetId: "AWS-StopEC2Instance"
+  #     TargetType: "SSM_DOCUMENT"
+  #     TargetVersion: "1"
+  #     Parameters:
+  #       AutomationAssumeRole:
+  #         StaticValue:
+  #           Values:
+  #             - Fn::GetAtt:
+  #                 - "AutoRemediationIamRole"
+  #                 - "Arn"
+  #       InstanceId:
+  #         ResourceValue:
+  #           Value: "RESOURCE_ID"
+  # AutoRemediationIamRole:
+  #   Type: "AWS::IAM::Role"
+  #   Properties:
+  #     RoleName: "StopNonCompliantEC2Role"
+  #     AssumeRolePolicyDocument:
+  #       Version: "2012-10-17"
+  #       Statement:
+  #         - Effect: "Allow"
+  #           Principal:
+  #             Service:
+  #               - "ec2.amazonaws.com"
+  #               - "events.amazonaws.com"
+  #               - "ssm.amazonaws.com"
+  #           Action:
+  #             - "sts:AssumeRole"
+  #     ManagedPolicyArns:
+  #       - "arn:aws:iam::aws:policy/service-role/AmazonSSMAutomationRole"
+  # AutomationPassRolePolicy:
+  #   Type: "AWS::IAM::Policy"
+  #   Properties:
+  #     PolicyName: "passAutomationRole"
+  #     PolicyDocument:
+  #       Version: "2012-10-17"
+  #       Statement:
+  #         - Effect: "Allow"
+  #           Action:
+  #             - "iam:PassRole"
+  #           Resource:
+  #             Fn::GetAtt:
+  #               - "AutoRemediationIamRole"
+  #               - "Arn"
+  #     Roles:
+  #       - Ref: "AutoRemediationIamRole"
+  NotificationEventRule:
+    Type: "AWS::Events::Rule"
+    Properties:
+      Name: "CWEventFordesired-instance-type"
+      Description: "SNS Notification for Non-Compliant Events of Config Rule: desired-instance-type"
+      State: "ENABLED"
+      EventPattern:
+        detail-type:
+          - "Config Rules Compliance Change"
+        source:
+          - "aws.config"
+        detail:
+          newEvaluationResult:
+            complianceType:
+              - "NON_COMPLIANT"
+          configRuleARN:
+            - Fn::GetAtt:
+                - "ConfigRule"
+                - "Arn"
+      Targets:
+        - Id: "RemediationNotification"
+          Arn:
+            Ref: "SnsTopic"
+          InputTransformer:
+            InputTemplate: "\"EC2 Instance <instance_id> was not compliant. Instance Remediated.\""
+            InputPathsMap:
+              instance_id: "$.detail.resourceId"
+  SnsTopic:
+    Type: "AWS::SNS::Topic"
+    Properties:
+      Subscription:
+        - Endpoint: "opsdev48@gmail.com"
+          Protocol: "email"
+      TopicName: "auto-remediation-notification"
+  SnsTopicPolicy:
+    Type: "AWS::SNS::TopicPolicy"
+    Properties:
+      PolicyDocument:
+        Statement:
+          - Sid: "__default_statement_ID"
+            Effect: "Allow"
+            Principal:
+              AWS: "*"
+            Action:
+              - "SNS:GetTopicAttributes"
+              - "SNS:SetTopicAttributes"
+              - "SNS:AddPermission"
+              - "SNS:RemovePermission"
+              - "SNS:DeleteTopic"
+              - "SNS:Subscribe"
+              - "SNS:ListSubscriptionsByTopic"
+              - "SNS:Publish"
+              - "SNS:Receive"
+            Resource:
+              Ref: "SnsTopic"
+            Condition:
+              StringEquals:
+                AWS:SourceOwner:
+                  Ref: "AWS::AccountId"
+          - Sid: "TrustCWEToPublishEventsToMyTopic"
+            Effect: "Allow"
+            Principal:
+              Service: "events.amazonaws.com"
+            Action: "sns:Publish"
+            Resource:
+              Ref: "SnsTopic"
+      Topics:
+        - Ref: "SnsTopic"
+Parameters: {}
+Metadata: {}
+Conditions: {}

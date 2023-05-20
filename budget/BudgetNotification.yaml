@@ -1,0 +1,70 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: AWS Budget Email Notification per Account
+
+#-----------------------------------------------------------------------------
+#Parameters
+#-----------------------------------------------------------------------------
+Parameters:
+  NotificationEmail:
+    Type: String
+    Description: Email address to send notifications to
+    Default: opsdev48@gmail.com
+
+  CostNotification:
+    Type: String
+    Description: Notification trigger for actual amount spent or how much you forecasted to spend
+    Default: ACTUAL
+    AllowedValues:
+      - ACTUAL
+      - FORECASTED
+  BudgetLimit:
+    Type: Number
+    Description: Budget limit in USD
+#-----------------------------------------------------------------------------
+#Resources
+#-----------------------------------------------------------------------------
+Resources:
+  Budget:
+    Type: AWS::Budgets::Budget
+    Properties:
+      Budget:
+        BudgetName: !Sub 'monthly-budget-${AWS::AccountId}' # AWSAccount.Alias resolves to IAM Alias of current account
+        BudgetLimit:
+          Amount: !Ref BudgetLimit
+          Unit: USD
+        TimeUnit: MONTHLY
+        BudgetType: COST
+      NotificationsWithSubscribers:
+        - Notification:
+            NotificationType: !Ref CostNotification
+            ComparisonOperator: GREATER_THAN
+            Threshold: 100
+          Subscribers:
+            - SubscriptionType: SNS
+              Address: !Ref BudgetAlarmTopic
+            - SubscriptionType: EMAIL
+              Address: !Ref NotificationEmail
+
+  BudgetAlarmTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: SNS-Budget-Alarm
+      DisplayName: !Sub 'Budget Alarm for ${AWS::AccountId}'
+      Subscription:
+        - Protocol: email
+          Endpoint: !Ref NotificationEmail
+
+  AlarmTopicPolicy:
+    Type: AWS::SNS::TopicPolicy
+    Properties:
+      Topics:
+        - !Ref BudgetAlarmTopic
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Sid: AllowBudgetPublish
+            Effect: Allow
+            Principal:
+              Service: budgets.amazonaws.com
+            Action: sns:publish
+            Resource: !Ref BudgetAlarmTopic

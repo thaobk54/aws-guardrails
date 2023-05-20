@@ -1,0 +1,224 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Resources:
+  TrustedAdvisorExposedKeyRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: ExposedKeyEventRule
+      EventPattern:
+        source:
+        - aws.trustedadvisor
+        detail-type:
+        - Trusted Advisor Check Item Refresh Notification
+        detail:
+          status:
+          - ERROR
+          check-name:
+          - Exposed Access Keys
+      State: ENABLED
+      Targets:
+      - Arn:
+          Ref: ExposedKeyStepFunction
+        Id: TargetFunctionV1
+        RoleArn:
+          Fn::GetAtt:
+          - ExecuteStateMachineRole
+          - Arn
+  ExecuteStateMachineRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Sid: AllowCWEServiceToAssumeRole
+          Effect: Allow
+          Action:
+          - sts:AssumeRole
+          Principal:
+            Service:
+            - events.amazonaws.com
+      Path: /
+      Policies:
+      - PolicyName: ExecuteStateMachine
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - states:StartExecution
+            Resource: '*'
+  ExposedKeyStepFunction:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      DefinitionString:
+        Fn::Sub: "{\n  \"Comment\": \"Deletes exposed IAM access keypairs and notifies\
+          \ security\",\n  \"StartAt\": \"DeleteAccessKeyPair\",\n  \"States\": {\n\
+          \    \"DeleteAccessKeyPair\": {\n      \"Type\": \"Task\",\n      \"Resource\"\
+          : \"${DeleteAccessKeyPair.Arn}\",\n      \"Next\": \"LookupCloudTrailEvents\"\
+          \n    },\n    \"LookupCloudTrailEvents\": {\n      \"Type\": \"Task\",\n\
+          \      \"Resource\": \"${LookupCloudTrailEvents.Arn}\",\n      \"Next\"\
+          : \"NotifySecurity\"\n    },\n    \"NotifySecurity\": {\n      \"Type\"\
+          : \"Task\",\n      \"Resource\": \"${NotifySecurity.Arn}\",\n      \"End\"\
+          : true\n    }\n  }\n}"
+      RoleArn:
+        Fn::GetAtt:
+        - StepFunctionExecutionRole
+        - Arn
+  StepFunctionExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: states.amazonaws.com
+          Action: sts:AssumeRole
+      Path: /
+      Policies:
+      - PolicyName: StatesExecutionPolicy
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - lambda:InvokeFunction
+            Resource: '*'
+  DeleteAccessKeyPair:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: delete_access_key_pair.lambda_handler
+      Runtime: python3.9
+      CodeUri: s3://vendermac-advisor-cft/120ad52182a69d6247f3a4d14bc80d2a
+      Role:
+        Fn::GetAtt:
+        - LambdaDeleteAccessKeyPairRole
+        - Arn
+  LookupCloudTrailEvents:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: lookup_cloudtrail_events.lambda_handler
+      Runtime: python3.9
+      CodeUri: s3://vendermac-advisor-cft/120ad52182a69d6247f3a4d14bc80d2a
+      Role:
+        Fn::GetAtt:
+        - LambdaLookupCloudTrailEventsRole
+        - Arn
+  NotifySecurity:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: notify_security.lambda_handler
+      Runtime: python3.9
+      CodeUri: s3://vendermac-advisor-cft/120ad52182a69d6247f3a4d14bc80d2a
+      Role:
+        Fn::GetAtt:
+        - LambdaSnsPublishRole
+        - Arn
+      Environment:
+        Variables:
+          TOPIC_ARN:
+            Ref: NotificationTopic
+  LambdaDeleteAccessKeyPairRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Sid: AllowLambdaServiceToAssumeRole
+          Effect: Allow
+          Action:
+          - sts:AssumeRole
+          Principal:
+            Service:
+            - lambda.amazonaws.com
+      Path: /
+      Policies:
+      - PolicyName: DeleteIAMAccessKeyPair
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - iam:DeleteAccessKey
+            Resource: '*'
+      - PolicyName: WriteToCWLogs
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - logs:CreateLogStream
+            - logs:CreateLogGroup
+            - logs:PutLogEvents
+            Resource: '*'
+  LambdaLookupCloudTrailEventsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Sid: AllowLambdaServiceToAssumeRole
+          Effect: Allow
+          Action:
+          - sts:AssumeRole
+          Principal:
+            Service:
+            - lambda.amazonaws.com
+      Path: /
+      Policies:
+      - PolicyName: LookupCloudTrailEvents
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - cloudtrail:LookupEvents
+            Resource: '*'
+      - PolicyName: WriteToCWLogs
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - logs:CreateLogStream
+            - logs:CreateLogGroup
+            - logs:PutLogEvents
+            Resource: '*'
+  LambdaSnsPublishRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Sid: AllowLambdaServiceToAssumeRole
+          Effect: Allow
+          Action:
+          - sts:AssumeRole
+          Principal:
+            Service:
+            - lambda.amazonaws.com
+      Path: /
+      Policies:
+      - PolicyName: PublishToSNSTopic
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - sns:Publish
+            Resource:
+              Ref: NotificationTopic
+      - PolicyName: WriteToCWLogs
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - logs:CreateLogStream
+            - logs:CreateLogGroup
+            - logs:PutLogEvents
+            Resource: '*'
+  NotificationTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      DisplayName: SecurityNotificationTopic
